@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Hum">
+  <rect width="512" height="512" rx="128" fill="#14100e"/>
+  <circle cx="256" cy="256" r="184" fill="#211a16"/>
+  <path d="M119 270c43-69 75-104 123-104 69 0 80 77 131 77 22 0 35-11 48-29" fill="none" stroke="#f0c987" stroke-width="32" stroke-linecap="round"/>
+  <path d="M115 301c35 37 77 61 128 61 83 0 107-69 165-69" fill="none" stroke="#82e4cd" stroke-width="32" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="43" fill="#fffaf0"/>
+</svg>

@@ -1,0 +1,70 @@
+name: Build Hum Android AAB
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android App Bundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.11.1
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure Android signing when secrets are present
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/release-keystore.jks
+            printf '%s\n' \
+              'storeFile=release-keystore.jks' \
+              "storePassword=$ANDROID_KEYSTORE_PASSWORD" \
+              "keyAlias=$ANDROID_KEY_ALIAS" \
+              "keyPassword=$ANDROID_KEY_PASSWORD" \
+              > android/key.properties
+            echo "Android signing configured from GitHub secrets."
+          else
+            echo "Signing secrets not fully configured; building an unsigned release AAB."
+            echo "For Play-ready signing, set ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD."
+          fi
+
+      - name: Sync Capacitor Android
+        run: npm run android:sync
+
+      - name: Build release AAB
+        run: |
+          chmod +x android/gradlew
+          npm run android:build:aab
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: hum-android-aab
+          path: android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error

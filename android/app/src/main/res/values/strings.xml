@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Hum</string>
+    <string name="title_activity_main">Hum</string>
+    <string name="package_name">com.qdenxp.hum</string>
+    <string name="custom_url_scheme">com.qdenxp.hum</string>
+</resources>
