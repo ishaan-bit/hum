@@ -25,7 +25,10 @@
 *.pem
 *.keystore
 *.jks
+key.properties
 hum-prod-c84e8-firebase-adminsdk-*.json
+*firebase-adminsdk*.json
+*service-account*.json
 firebase-service-account.json
 serviceAccountKey.json
 android/key.properties

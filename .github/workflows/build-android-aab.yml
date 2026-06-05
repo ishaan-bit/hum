@@ -33,38 +33,82 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Configure Android signing when secrets are present
+      - name: Validate Android signing secrets
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/release-keystore.jks
-            printf '%s\n' \
-              'storeFile=release-keystore.jks' \
-              "storePassword=$ANDROID_KEYSTORE_PASSWORD" \
-              "keyAlias=$ANDROID_KEY_ALIAS" \
-              "keyPassword=$ANDROID_KEY_PASSWORD" \
-              > android/key.properties
-            echo "Android signing configured from GitHub secrets."
-          else
-            echo "Signing secrets not fully configured; building an unsigned release AAB."
-            echo "For Play-ready signing, set ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD."
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing Android signing secret: $name"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
           fi
+          echo "Android signing secrets present: yes"
 
       - name: Sync Capacitor Android
         run: npm run android:sync
+
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          signing_dir="$RUNNER_TEMP/android-signing"
+          keystore_path="$signing_dir/upload-keystore.jks"
+
+          mkdir -p "$signing_dir"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          printf '%s\n' \
+            "storeFile=$keystore_path" \
+            "storePassword=$ANDROID_KEYSTORE_PASSWORD" \
+            "keyAlias=$ANDROID_KEY_ALIAS" \
+            "keyPassword=$ANDROID_KEY_PASSWORD" \
+            > android/key.properties
+
+          echo "Android release signing configured."
+          echo "Signing config path: android/key.properties"
 
       - name: Build release AAB
         run: |
           chmod +x android/gradlew
           npm run android:build:aab
 
-      - name: Upload AAB
+      - name: Validate signed release AAB
+        run: |
+          aab_path="$(find android/app/build/outputs/bundle/release -name '*.aab' -print -quit)"
+          if [ -z "$aab_path" ] || [ ! -f "$aab_path" ]; then
+            echo "Signed release AAB not found."
+            exit 1
+          fi
+
+          echo "Artifact path: $aab_path"
+          echo "File size bytes: $(stat -c%s "$aab_path")"
+          echo "Release task used: ./gradlew bundleRelease"
+          echo "Signing config path used: android/key.properties"
+          echo "Signing secrets present: yes"
+
+          jarsigner -verify -verbose -certs "$aab_path" > "$RUNNER_TEMP/aab-jarsigner.txt"
+          if grep -q "CN=Android Debug" "$RUNNER_TEMP/aab-jarsigner.txt"; then
+            echo "AAB appears to be debug-signed; refusing to upload."
+            exit 1
+          fi
+
+          grep -E "jar verified|signed by|X.509" "$RUNNER_TEMP/aab-jarsigner.txt" || true
+          echo "AAB signing verification passed."
+
+      - name: Upload signed release AAB
         uses: actions/upload-artifact@v4
         with:
-          name: hum-android-aab
+          name: hum-android-aab-signed
           path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
