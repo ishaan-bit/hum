@@ -29,7 +29,7 @@ export function getNotificationOptInCopy(availability: NotificationOptInAvailabi
   if (availability.permission === "denied") {
     return {
       title: "Reminders are blocked",
-      body: "Your browser has blocked reminders. Enable notifications for this site in browser settings, then try again.",
+      body: "Notifications are blocked for Hum on this device. Enable them in settings, then try again.",
       buttonLabel: "Check again",
       buttonDisabled: false,
     };

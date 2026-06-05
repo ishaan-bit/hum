@@ -137,7 +137,108 @@ test("granted permission stores token payload under users/{uid}/pushTokens/{toke
   assert.equal(writes.length, 1);
   assert.match(writes[0].path, /^users\/uid-1\/pushTokens\/[A-Za-z0-9_-]+$/);
   assert.equal(writes[0].payload.provider, "fcm");
+  assert.equal(writes[0].payload.platform, "web");
+  assert.equal(writes[0].payload.source, "web");
   assert.equal(writes[0].payload.permission, "granted");
+});
+
+test("native Android permission stores FCM token under users/{uid}/pushTokens/{tokenId}", async () => {
+  const storage = installBrowserPushGlobals();
+  const writes: Array<{ path: string; payload: ReturnType<typeof buildPushTokenPayload> }> = [];
+  const result = await registerNotificationTokenAfterUserAction({
+    uid: "uid-android",
+    isAndroidNative: async () => true,
+    nativePushAvailable: async () => true,
+    checkNativePermission: async () => "prompt",
+    requestNativePermission: async () => "granted",
+    getNativeToken: async () => "android-fcm-token",
+    writeToken: async (path, payload) => {
+      writes.push({ path, payload });
+    },
+    now: () => "2026-06-04T10:00:00.000Z",
+    appVersion: "0.1.1",
+    buildVersion: "2",
+  });
+
+  const diagnostics = JSON.parse(storage.getItem(HUM_NOTIFICATION_STATUS_KEY) ?? "{}");
+  assert.equal(result.supported, true);
+  assert.equal(result.permission, "granted");
+  assert.equal(result.tokenStored, true);
+  assert.match(result.tokenPath ?? "", /^users\/uid-android\/pushTokens\/[A-Za-z0-9_-]+$/);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].path, result.tokenPath);
+  assert.equal(writes[0].payload.provider, "fcm");
+  assert.equal(writes[0].payload.platform, "android");
+  assert.equal(writes[0].payload.permission, "granted");
+  assert.equal(writes[0].payload.source, "native");
+  assert.equal(writes[0].payload.appVersion, "0.1.1");
+  assert.equal(writes[0].payload.buildVersion, "2");
+  assert.equal(JSON.stringify(writes[0].payload).includes("rawAudio"), false);
+  assert.equal(diagnostics.platform, "android");
+  assert.equal(diagnostics.nativePushAvailable, true);
+  assert.equal(diagnostics.androidPermission, "granted");
+  assert.equal(diagnostics.tokenReceived, true);
+  assert.equal(diagnostics.tokenStored, true);
+  assert.equal(diagnostics.tokenDocPath, result.tokenPath);
+  assert.equal(JSON.stringify(diagnostics).includes("android-fcm-token"), false);
+});
+
+test("native Android denied permission stores no token and records state", async () => {
+  const storage = installBrowserPushGlobals();
+  const result = await registerNotificationTokenAfterUserAction({
+    uid: "uid-android",
+    isAndroidNative: async () => true,
+    nativePushAvailable: async () => true,
+    checkNativePermission: async () => "prompt",
+    requestNativePermission: async () => "denied",
+    getNativeToken: async () => assert.fail("denied native permission must not request an FCM token"),
+    writeToken: async () => assert.fail("denied native permission must not write tokens"),
+    now: () => "2026-06-04T10:00:00.000Z",
+  });
+
+  const diagnostics = JSON.parse(storage.getItem(HUM_NOTIFICATION_STATUS_KEY) ?? "{}");
+  assert.equal(result.supported, true);
+  assert.equal(result.permission, "denied");
+  assert.equal(result.tokenStored, false);
+  assert.equal(diagnostics.platform, "android");
+  assert.equal(diagnostics.nativePushAvailable, true);
+  assert.equal(diagnostics.androidPermission, "denied");
+  assert.equal(diagnostics.tokenRequested, false);
+  assert.equal(diagnostics.tokenReceived, false);
+  assert.equal(diagnostics.tokenStored, false);
+});
+
+test("native Android unavailable path does not break the app", async () => {
+  const storage = installBrowserPushGlobals();
+  const result = await registerNotificationTokenAfterUserAction({
+    uid: "uid-android",
+    isAndroidNative: async () => true,
+    nativePushAvailable: async () => false,
+    getNativeToken: async () => assert.fail("unavailable native push must not request a token"),
+    writeToken: async () => assert.fail("unavailable native push must not write tokens"),
+    now: () => "2026-06-04T10:00:00.000Z",
+  });
+
+  const diagnostics = JSON.parse(storage.getItem(HUM_NOTIFICATION_STATUS_KEY) ?? "{}");
+  assert.equal(result.supported, false);
+  assert.equal(result.permission, "unsupported");
+  assert.equal(result.tokenStored, false);
+  assert.equal(diagnostics.platform, "android");
+  assert.equal(diagnostics.nativePushAvailable, false);
+  assert.equal(diagnostics.lastErrorCode, "native-push-unavailable");
+});
+
+test("native Android availability does not require a web VAPID key", async () => {
+  const result = await getNotificationOptInAvailability({
+    isAndroidNative: async () => true,
+    nativePushAvailable: async () => true,
+    checkNativePermission: async () => "prompt",
+    vapidKey: "",
+  });
+
+  assert.equal(result.supported, true);
+  assert.equal(result.permission, "default");
+  assert.equal(result.vapidKeyPresent, true);
 });
 
 test("registration diagnostics include debug-safe VAPID and token status", async () => {
@@ -199,6 +300,26 @@ test("token payload excludes raw audio fields", () => {
   assert.equal(Object.hasOwn(payload, "audioBlob"), false);
 });
 
+test("native token payload excludes raw audio fields", () => {
+  const payload = buildPushTokenPayload({
+    token: "android-fcm-token",
+    tokenHash: "token-id",
+    now: "2026-06-04T10:00:00.000Z",
+    appVersion: "0.1.1",
+    vapidKeyVersion: null,
+    platform: "android",
+    source: "native",
+    buildVersion: "2",
+    deviceInfo: { userAgentSummary: "Capacitor | Android", language: "en-US", standalone: true },
+  });
+
+  assertPushTokenPayloadSafe(payload);
+  assert.equal(payload.platform, "android");
+  assert.equal(payload.source, "native");
+  assert.equal(Object.hasOwn(payload, "rawAudio"), false);
+  assert.equal(Object.hasOwn(payload, "audioBlob"), false);
+});
+
 test("service worker registration failure records a diagnostic", async () => {
   const storage = installBrowserPushGlobals();
   const result = await registerNotificationTokenAfterUserAction({
@@ -238,6 +359,9 @@ test("token received diagnostic includes token document path but not token value
   const rawDiagnostics = storage.getItem(HUM_NOTIFICATION_STATUS_KEY) ?? "";
   const diagnostics = JSON.parse(rawDiagnostics);
   assert.equal(diagnostics.authUidPresent, true);
+  assert.equal(diagnostics.platform, "web");
+  assert.equal(diagnostics.nativePushAvailable, false);
+  assert.equal(diagnostics.androidPermission, null);
   assert.equal(diagnostics.serviceWorkerRegistered, true);
   assert.equal(diagnostics.messagingInitialized, true);
   assert.equal(diagnostics.tokenRequested, true);

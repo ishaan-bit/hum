@@ -67,7 +67,7 @@ test("denied permission renders off state without throwing", () => {
   });
 
   assert.equal(copy.title, "Reminders are blocked");
-  assert.equal(copy.body, "Your browser has blocked reminders. Enable notifications for this site in browser settings, then try again.");
+  assert.equal(copy.body, "Notifications are blocked for Hum on this device. Enable them in settings, then try again.");
   assert.equal(copy.buttonLabel, "Check again");
 });
 

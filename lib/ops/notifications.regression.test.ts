@@ -79,6 +79,22 @@ test("bulk notification payload uses the expected FCM broadcast shape", () => {
   assert.equal(message.webpush?.fcmOptions?.link, "https://hum-beta.vercel.app/read");
 });
 
+test("ops broadcast payload is compatible with Android and web tokens", () => {
+  const message = buildOpsBroadcastMessage({
+    campaignId: "campaign-1",
+    title: "Custom title",
+    body: "Custom body",
+    url: "https://hum-beta.vercel.app/read",
+    audienceType: "all_with_tokens",
+  }, ["web-token", "android-token"]);
+
+  assert.deepEqual(message.notification, { title: "Custom title", body: "Custom body" });
+  assert.equal(message.data?.url, "https://hum-beta.vercel.app/read");
+  assert.equal(message.webpush?.fcmOptions?.link, "https://hum-beta.vercel.app/read");
+  assert.equal(JSON.stringify(message).includes("rawAudio"), false);
+  assert.equal(JSON.stringify(message).includes("audioBlob"), false);
+});
+
 test("single-token broadcast payload uses the supported FCM send shape", () => {
   const message = buildOpsBroadcastSingleMessage({
     campaignId: "campaign-1",

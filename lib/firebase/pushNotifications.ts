@@ -1,4 +1,5 @@
 import { doc, setDoc } from "firebase/firestore";
+import type { PermissionState } from "@capacitor/core";
 import { HUM_APP_VERSION, forbiddenFirestoreHumFields } from "@/lib/firebase/humPayload";
 import { getFirebaseAnonymousUser, getFirebaseClientServices } from "@/lib/firebase/client";
 import { getFirebaseMessagingClient } from "@/lib/firebase/messagingClient";
@@ -7,6 +8,9 @@ export const HUM_NOTIFICATION_STATUS_KEY = "hum:notification-status:v1";
 export const HUM_NOTIFICATION_PROMPT_DISMISSED_KEY = "hum:notification-prompt-dismissed:v1";
 
 export type NotificationRegistrationDiagnostics = {
+  platform: "web" | "android";
+  nativePushAvailable: boolean;
+  androidPermission: PermissionState | "unsupported" | "unknown" | null;
   supported: boolean;
   permission: NotificationPermission | "unsupported" | "unknown";
   vapidKeyPresent: boolean;
@@ -34,11 +38,14 @@ export type PushTokenPayload = {
   token: string;
   tokenHash: string;
   provider: "fcm";
-  platform: "web";
+  platform: "web" | "android";
   permission: "granted";
   createdAt: string;
   updatedAt: string;
   lastSeenAt: string;
+  source?: "web" | "native";
+  buildVersion?: string | null;
+  deviceInfo?: Record<string, string | boolean | null>;
   userAgentSummary: string | null;
   appVersion: string;
   vapidKeyVersion: string | null;
@@ -53,14 +60,20 @@ type RegisterPushTokenDeps = {
   uid?: string | null;
   db?: unknown;
   getToken?: MessagingTokenProvider;
+  getNativeToken?: () => Promise<string>;
   writeToken?: (path: string, payload: PushTokenPayload) => Promise<void>;
   registerServiceWorker?: () => Promise<ServiceWorkerRegistration>;
   messagingSupported?: () => Promise<boolean>;
   requestPermission?: () => Promise<NotificationPermission>;
   getPermission?: () => NotificationPermission;
+  isAndroidNative?: () => Promise<boolean>;
+  nativePushAvailable?: () => Promise<boolean>;
+  checkNativePermission?: () => Promise<PermissionState>;
+  requestNativePermission?: () => Promise<PermissionState>;
   now?: () => string;
   vapidKey?: string;
   appVersion?: string;
+  buildVersion?: string | null;
   vapidKeyVersion?: string | null;
 };
 
@@ -68,6 +81,9 @@ type NotificationAvailabilityDeps = {
   getPermission?: () => NotificationPermission;
   vapidKey?: string;
   messagingSupported?: () => Promise<boolean>;
+  isAndroidNative?: () => Promise<boolean>;
+  nativePushAvailable?: () => Promise<boolean>;
+  checkNativePermission?: () => Promise<PermissionState>;
 };
 
 type NotificationRegistrationResult = {
@@ -90,6 +106,19 @@ export function canAttemptWebPushRegistration() {
 export async function getNotificationOptInAvailability(
   deps: NotificationAvailabilityDeps = {},
 ): Promise<NotificationOptInAvailability> {
+  const nativeAndroid = await isAndroidNativeRuntime(deps);
+  if (nativeAndroid) {
+    const nativeAvailable = await canUseNativePushNotifications(deps);
+    const androidPermission = nativeAvailable ? await getAndroidPushPermission(deps) : "unsupported";
+    return {
+      supported: nativeAvailable,
+      permission: normalizeAndroidPermission(androidPermission),
+      vapidKeyPresent: true,
+      tokenStored: readStoredTokenStatus(),
+      setupFailed: readSetupFailedStatus(),
+    };
+  }
+
   const vapidKey = deps.vapidKey ?? process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ?? "";
   const permission = getCurrentNotificationPermission(deps.getPermission);
   const browserSupported = canAttemptWebPushRegistration();
@@ -117,11 +146,18 @@ export function shouldShowFirstOpenNotificationPrompt({
 export async function registerNotificationTokenAfterUserAction(
   deps: RegisterPushTokenDeps = {},
 ): Promise<NotificationRegistrationResult> {
+  if (await isAndroidNativeRuntime(deps)) {
+    return registerNativeAndroidNotificationTokenAfterUserAction(deps);
+  }
+
   const now = deps.now?.() ?? new Date().toISOString();
   const getPermission = () => getCurrentNotificationPermission(deps.getPermission);
   const vapidKey = deps.vapidKey ?? process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ?? "";
   const vapidKeyPresent = Boolean(vapidKey);
   const baseDiagnostics = (): NotificationRegistrationDiagnostics => ({
+    platform: "web",
+    nativePushAvailable: false,
+    androidPermission: null,
     supported: canAttemptWebPushRegistration(),
     permission: getPermission(),
     vapidKeyPresent,
@@ -222,6 +258,9 @@ export async function registerNotificationTokenAfterUserAction(
       now,
       appVersion: deps.appVersion ?? HUM_APP_VERSION,
       vapidKeyVersion: deps.vapidKeyVersion ?? buildVapidKeyVersion(vapidKey),
+      platform: "web",
+      source: "web",
+      buildVersion: deps.buildVersion ?? null,
     });
 
     assertPushTokenPayloadSafe(payload);
@@ -275,22 +314,33 @@ export function buildPushTokenPayload({
   now,
   appVersion,
   vapidKeyVersion,
+  platform = "web",
+  source = "web",
+  buildVersion = null,
+  deviceInfo,
 }: {
   token: string;
   tokenHash: string;
   now: string;
   appVersion: string;
   vapidKeyVersion: string | null;
+  platform?: PushTokenPayload["platform"];
+  source?: PushTokenPayload["source"];
+  buildVersion?: string | null;
+  deviceInfo?: PushTokenPayload["deviceInfo"];
 }): PushTokenPayload {
   return {
     token,
     tokenHash,
     provider: "fcm",
-    platform: "web",
+    platform,
     permission: "granted",
     createdAt: now,
     updatedAt: now,
     lastSeenAt: now,
+    source,
+    buildVersion,
+    deviceInfo,
     userAgentSummary: getSafeUserAgentSummary(),
     appVersion,
     vapidKeyVersion,
@@ -351,6 +401,206 @@ function readNotificationDiagnostics(): Partial<NotificationRegistrationDiagnost
   }
 }
 
+async function registerNativeAndroidNotificationTokenAfterUserAction(
+  deps: RegisterPushTokenDeps,
+): Promise<NotificationRegistrationResult> {
+  const now = deps.now?.() ?? new Date().toISOString();
+  const nativePushAvailable = await canUseNativePushNotifications(deps);
+  const baseDiagnostics = (androidPermission: NotificationRegistrationDiagnostics["androidPermission"]): NotificationRegistrationDiagnostics => ({
+    platform: "android",
+    nativePushAvailable,
+    androidPermission,
+    supported: nativePushAvailable,
+    permission: normalizeAndroidPermission(androidPermission),
+    vapidKeyPresent: true,
+    serviceWorkerRegistered: false,
+    messagingInitialized: nativePushAvailable,
+    authUidPresent: false,
+    tokenRequested: false,
+    tokenReceived: false,
+    tokenStored: false,
+    tokenDocPath: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    lastAttemptAt: now,
+  });
+
+  if (!nativePushAvailable) {
+    writeNotificationDiagnostics({
+      ...baseDiagnostics("unsupported"),
+      lastErrorCode: "native-push-unavailable",
+      lastErrorMessage: "Native push notifications are not available in this Android wrapper.",
+    });
+    return { supported: false, permission: "unsupported", tokenStored: false, tokenPath: null };
+  }
+
+  try {
+    const beforePermission = await getAndroidPushPermission(deps);
+    writeNotificationDiagnostics(baseDiagnostics(beforePermission));
+
+    const requestedPermission = await requestAndroidPushPermission(deps);
+    if (requestedPermission !== "granted") {
+      writeNotificationDiagnostics(baseDiagnostics(requestedPermission));
+      return {
+        supported: true,
+        permission: normalizeAndroidPermission(requestedPermission),
+        tokenStored: false,
+        tokenPath: null,
+      };
+    }
+
+    const services = getFirebaseClientServices();
+    const user = deps.uid === undefined ? await getFirebaseAnonymousUser() : { uid: deps.uid };
+    const uid = user?.uid;
+    if (!uid) throw new Error("Notification token write requires an authenticated Firebase uid.");
+
+    writeNotificationDiagnostics({
+      ...baseDiagnostics("granted"),
+      authUidPresent: true,
+      tokenRequested: true,
+    });
+
+    const token = deps.getNativeToken === undefined ? await getNativeFcmToken() : await deps.getNativeToken();
+    if (!token) throw new Error("Native push registration did not return an FCM token.");
+
+    writeNotificationDiagnostics({
+      ...baseDiagnostics("granted"),
+      authUidPresent: true,
+      tokenRequested: true,
+      tokenReceived: true,
+    });
+
+    const tokenHash = await buildPushTokenHash(token);
+    const tokenPath = buildPushTokenPath(uid, tokenHash);
+    const payload = buildPushTokenPayload({
+      token,
+      tokenHash,
+      now,
+      appVersion: deps.appVersion ?? HUM_APP_VERSION,
+      buildVersion: deps.buildVersion ?? readAndroidBuildVersion(),
+      vapidKeyVersion: null,
+      platform: "android",
+      source: "native",
+      deviceInfo: getSafeNativeDeviceInfo(),
+    });
+
+    assertPushTokenPayloadSafe(payload);
+
+    if (deps.writeToken) {
+      await deps.writeToken(tokenPath, payload);
+    } else {
+      if (!services) throw new Error("Firebase is not configured.");
+      await setDoc(doc(services.db, "users", uid, "pushTokens", tokenHash), payload, { merge: true });
+    }
+
+    writeNotificationDiagnostics({
+      ...baseDiagnostics("granted"),
+      authUidPresent: true,
+      tokenRequested: true,
+      tokenReceived: true,
+      tokenStored: true,
+      tokenDocPath: tokenPath,
+    });
+
+    return { supported: true, permission: "granted", tokenStored: true, tokenPath };
+  } catch (error) {
+    const existing = readNotificationDiagnostics();
+    const androidPermission = existing?.androidPermission ?? await getAndroidPushPermission(deps).catch(() => "unknown" as const);
+    writeNotificationDiagnostics({
+      ...baseDiagnostics(androidPermission),
+      authUidPresent: existing?.authUidPresent ?? false,
+      tokenRequested: existing?.tokenRequested ?? false,
+      tokenReceived: existing?.tokenReceived ?? false,
+      tokenStored: false,
+      tokenDocPath: existing?.tokenDocPath ?? null,
+      lastErrorCode: classifyRegistrationError(error),
+      lastErrorMessage: errorMessage(error),
+    });
+    return { supported: true, permission: normalizeAndroidPermission(androidPermission), tokenStored: false, tokenPath: null };
+  }
+}
+
+async function isAndroidNativeRuntime(deps: Pick<RegisterPushTokenDeps, "isAndroidNative">) {
+  if (deps.isAndroidNative) return deps.isAndroidNative();
+  if (typeof window === "undefined") return false;
+
+  try {
+    const { Capacitor } = await import("@capacitor/core");
+    return Capacitor.getPlatform() === "android" && Capacitor.isNativePlatform();
+  } catch {
+    return false;
+  }
+}
+
+async function canUseNativePushNotifications(deps: Pick<RegisterPushTokenDeps, "nativePushAvailable">) {
+  if (deps.nativePushAvailable) return deps.nativePushAvailable();
+  if (typeof window === "undefined") return false;
+
+  try {
+    const { Capacitor } = await import("@capacitor/core");
+    return Capacitor.isPluginAvailable("PushNotifications");
+  } catch {
+    return false;
+  }
+}
+
+async function getAndroidPushPermission(deps: Pick<RegisterPushTokenDeps, "checkNativePermission">) {
+  if (deps.checkNativePermission) return deps.checkNativePermission();
+  const { PushNotifications } = await import("@capacitor/push-notifications");
+  return (await PushNotifications.checkPermissions()).receive;
+}
+
+async function requestAndroidPushPermission(deps: Pick<RegisterPushTokenDeps, "requestNativePermission">) {
+  if (deps.requestNativePermission) return deps.requestNativePermission();
+  const { PushNotifications } = await import("@capacitor/push-notifications");
+  return (await PushNotifications.requestPermissions()).receive;
+}
+
+async function getNativeFcmToken() {
+  const { PushNotifications } = await import("@capacitor/push-notifications");
+
+  return new Promise<string>(async (resolve, reject) => {
+    let settled = false;
+    let registrationHandle: { remove: () => Promise<void> } | null = null;
+    let errorHandle: { remove: () => Promise<void> } | null = null;
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      void registrationHandle?.remove();
+      void errorHandle?.remove();
+      reject(new Error("Native push registration timed out."));
+    }, 15000);
+
+    try {
+      registrationHandle = await PushNotifications.addListener("registration", (token) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        void registrationHandle?.remove();
+        void errorHandle?.remove();
+        resolve(token.value);
+      });
+      errorHandle = await PushNotifications.addListener("registrationError", (error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        void registrationHandle?.remove();
+        void errorHandle?.remove();
+        reject(new Error(error.error || "Native push registration failed."));
+      });
+      await PushNotifications.register();
+    } catch (error) {
+      if (!settled) {
+        settled = true;
+        window.clearTimeout(timeout);
+        void registrationHandle?.remove();
+        void errorHandle?.remove();
+        reject(error);
+      }
+    }
+  });
+}
+
 async function getDefaultFcmToken(vapidKey: string, serviceWorkerRegistration: ServiceWorkerRegistration) {
   const messaging = await getFirebaseMessagingClient();
   if (!messaging) throw new Error("Firebase Messaging is not supported in this browser.");
@@ -372,6 +622,27 @@ function getSafeUserAgentSummary() {
   const language = navigator.language || null;
   const browser = summarizeBrowser(navigator.userAgent);
   return [browser, platform, mobile, language].filter(Boolean).join(" | ").slice(0, 180);
+}
+
+function getSafeNativeDeviceInfo() {
+  if (typeof navigator === "undefined") return undefined;
+
+  return {
+    userAgentSummary: getSafeUserAgentSummary(),
+    language: navigator.language || null,
+    standalone: true,
+  };
+}
+
+function readAndroidBuildVersion() {
+  return process.env.NEXT_PUBLIC_HUM_BUILD_VERSION ?? null;
+}
+
+function normalizeAndroidPermission(permission: PermissionState | "unsupported" | "unknown" | null | undefined) {
+  if (permission === "granted") return "granted";
+  if (permission === "denied") return "denied";
+  if (permission === "unsupported") return "unsupported";
+  return "default";
 }
 
 function summarizeBrowser(userAgent: string) {
