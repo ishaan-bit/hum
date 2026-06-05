@@ -33,7 +33,9 @@ hum-prod-c84e8-firebase-adminsdk-*.json
 firebase-service-account.json
 serviceAccountKey.json
 android/key.properties
+google-services.json
 android/app/google-services.json
+**/google-services.json
 
 # debug
 npm-debug.log*
