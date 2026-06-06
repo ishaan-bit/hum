@@ -15,6 +15,12 @@ import {
   type RecordingStateTransition,
 } from "@/lib/recordingAttempt";
 import {
+  getMicrophoneBlockedInstructions,
+  openAndroidMicrophoneSettings,
+  requestMicrophonePermissionAfterUserAction,
+  type MicrophonePermissionStatus,
+} from "@/lib/microphonePermissions";
+import {
   getLiveSignalMetrics,
   getLiveFeedbackCopy,
   getLiveQualityEstimate,
@@ -63,6 +69,9 @@ export default function Recorder({
   const [status, setStatus] = useState<"idle" | "requesting" | "recording" | "captured" | "error">("idle");
   const [secondsLeft, setSecondsLeft] = useState(RECORDING_SECONDS);
   const [error, setError] = useState<string | null>(null);
+  const [microphoneBlocked, setMicrophoneBlocked] = useState(false);
+  const [microphoneFixNote, setMicrophoneFixNote] = useState<string | null>(null);
+  const [microphonePermission, setMicrophonePermission] = useState<MicrophonePermissionStatus | null>(null);
   const [micMetrics, setMicMetrics] = useState<LiveSignalMetrics>(EMPTY_SIGNAL_METRICS);
   const [liveQualityEstimate, setLiveQualityEstimate] = useState<LiveQualityEstimate>(() =>
     getLiveQualityEstimate(EMPTY_SIGNAL_METRICS, [], "silent"),
@@ -110,6 +119,8 @@ export default function Recorder({
 
   async function startRecording() {
     setError(null);
+    setMicrophoneBlocked(false);
+    setMicrophoneFixNote(null);
     const attemptId = createRecordingAttemptId();
     const startedAt = new Date().toISOString();
     beginCaptureAttempt(attemptId, startedAt);
@@ -121,6 +132,15 @@ export default function Recorder({
 
     try {
       setStatus("requesting");
+      const permission = await requestMicrophonePermissionAfterUserAction();
+      setMicrophonePermission(permission);
+      if (!permission.permissionGranted) {
+        failRecordingAttempt("permission_denied", "microphone permission was denied");
+        showMicrophoneBlocked(permission);
+        cleanupStream();
+        return;
+      }
+
       const stream = await ensureStream();
       const mimeTypeSelection = selectMediaRecorderMimeType(MediaRecorder);
       setMimeTypeSelection(mimeTypeSelection);
@@ -208,7 +228,30 @@ export default function Recorder({
       const stage = isPermissionDeniedError(error) ? "permission_denied" : "recorder_start_failed";
       const reason = stage === "permission_denied" ? "microphone permission was denied" : "recording setup failed";
       failRecordingAttempt(stage, reason, error);
+      if (stage === "permission_denied") showMicrophoneBlocked(microphonePermission);
       cleanupStream();
+    }
+  }
+
+  async function enableMicrophoneFromRecorder() {
+    setMicrophoneFixNote(null);
+    const permission = await requestMicrophonePermissionAfterUserAction();
+    setMicrophonePermission(permission);
+
+    if (permission.permissionGranted) {
+      setMicrophoneBlocked(false);
+      setError(null);
+      setStatus("idle");
+      return;
+    }
+
+    showMicrophoneBlocked(permission);
+  }
+
+  async function openMicrophoneSettingsFromRecorder() {
+    const opened = await openAndroidMicrophoneSettings();
+    if (!opened) {
+      setMicrophoneFixNote(getMicrophoneBlockedInstructions(microphonePermission));
     }
   }
 
@@ -299,6 +342,14 @@ export default function Recorder({
     saveRecordingAttemptDiagnostic(diagnostic);
     setStatus("error");
     setError(`${copy.title} ${copy.message}`);
+  }
+
+  function showMicrophoneBlocked(permission: MicrophonePermissionStatus | null) {
+    setMicrophonePermission(permission);
+    setMicrophoneBlocked(true);
+    setStatus("error");
+    setError("Microphone access is needed to record a hum.");
+    setMicrophoneFixNote(getMicrophoneBlockedInstructions(permission));
   }
 
   function recordRecorderState(event: string, state: string) {
@@ -563,6 +614,19 @@ export default function Recorder({
           </button>
 
           {error ? <p className="hum-capture-error">{error}</p> : null}
+          {microphoneBlocked ? (
+            <div className="hum-microphone-actions">
+              <button type="button" className="hum-microphone-primary" onClick={enableMicrophoneFromRecorder}>
+                Enable microphone
+              </button>
+              {microphonePermission?.platform === "android" || microphonePermission?.capacitorDetected ? (
+                <button type="button" className="hum-microphone-secondary" onClick={openMicrophoneSettingsFromRecorder}>
+                  Open settings
+                </button>
+              ) : null}
+              {microphoneFixNote ? <p className="hum-capture-error">{microphoneFixNote}</p> : null}
+            </div>
+          ) : null}
         </div>
 
         {liveFeedback}

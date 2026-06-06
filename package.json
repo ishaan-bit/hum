@@ -1,6 +1,6 @@
 {
   "name": "hum",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -19,7 +19,7 @@
     "android:sync": "cap sync android",
     "android:build:aab": "node scripts/build-android-aab.mjs",
     "android:open": "cap open android",
-    "test": "node --experimental-strip-types --loader ./tests/alias-loader.mjs --test ./lib/mediaRecorderSupport.regression.test.ts ./lib/recordingAttempt.regression.test.ts ./lib/quality.regression.test.ts ./lib/recommendation.regression.test.ts ./lib/liveSignal.regression.test.ts ./lib/liveMusic.regression.test.ts ./lib/songReadCopy.regression.test.ts ./lib/soundMatchFilters.regression.test.ts ./lib/momentRead.regression.test.ts ./lib/threadInsight.regression.test.ts ./lib/threadPath.regression.test.ts ./lib/historyPanel.regression.test.ts ./lib/storage.regression.test.ts ./lib/firebase/humSync.regression.test.ts ./lib/firebase/pushNotifications.regression.test.ts ./components/app/SettingsPanel.regression.test.ts ./lib/firebase/admin.regression.test.ts ./lib/ops/analytics.regression.test.ts ./lib/ops/data.regression.test.ts ./lib/ops/notifications.regression.test.ts ./lib/settingsContent.regression.test.ts ./lib/productPolish.regression.test.ts ./app/api/music/recommend/route.regression.test.ts"
+    "test": "node --experimental-strip-types --loader ./tests/alias-loader.mjs --test ./lib/mediaRecorderSupport.regression.test.ts ./lib/microphonePermissions.regression.test.ts ./lib/recordingAttempt.regression.test.ts ./lib/quality.regression.test.ts ./lib/recommendation.regression.test.ts ./lib/liveSignal.regression.test.ts ./lib/liveMusic.regression.test.ts ./lib/songReadCopy.regression.test.ts ./lib/soundMatchFilters.regression.test.ts ./lib/momentRead.regression.test.ts ./lib/threadInsight.regression.test.ts ./lib/threadPath.regression.test.ts ./lib/historyPanel.regression.test.ts ./lib/storage.regression.test.ts ./lib/firebase/humSync.regression.test.ts ./lib/firebase/pushNotifications.regression.test.ts ./components/app/SettingsPanel.regression.test.ts ./lib/firebase/admin.regression.test.ts ./lib/ops/analytics.regression.test.ts ./lib/ops/data.regression.test.ts ./lib/ops/notifications.regression.test.ts ./lib/settingsContent.regression.test.ts ./lib/productPolish.regression.test.ts ./app/api/music/recommend/route.regression.test.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

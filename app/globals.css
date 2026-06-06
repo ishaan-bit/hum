@@ -418,6 +418,36 @@ body {
   margin: 0;
 }
 
+.hum-microphone-actions {
+  display: grid;
+  gap: 0.58rem;
+  width: 100%;
+}
+
+.hum-microphone-primary,
+.hum-microphone-secondary {
+  align-items: center;
+  border-radius: 0.82rem;
+  display: inline-flex;
+  font-size: 0.88rem;
+  font-weight: 800;
+  justify-content: center;
+  min-height: 2.62rem;
+  padding: 0 0.86rem;
+}
+
+.hum-microphone-primary {
+  background: #171514;
+  border: 0;
+  color: #fffaf0;
+}
+
+.hum-microphone-secondary {
+  background: rgba(23, 21, 20, 0.05);
+  border: 1px solid rgba(23, 21, 20, 0.14);
+  color: #3d342b;
+}
+
 .live-signal-card {
   background:
     radial-gradient(circle at 10% 0%, rgba(255, 204, 132, 0.12), transparent 34%),
